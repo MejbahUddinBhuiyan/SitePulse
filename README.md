@@ -1,79 +1,318 @@
+
 # SitePulse
 
-**Status: Milestone 1 complete (project scaffold).** SitePulse is a Python-only CLI project that will monitor websites concurrently, persist history, and produce observed-availability reports. **Monitoring is not implemented yet.**
+### Intelligent Asynchronous Website Monitoring System
 
-## Requirements
+A Python command-line application for checking website availability, measuring response times, storing monitoring history, and generating reports.
 
-- Python 3.12 or newer
-- Windows PowerShell (recommended) and VS Code
-- Internet access for installing Python packages
+SitePulse uses Python's `asyncio` and `aiohttp` to monitor multiple websites concurrently. It supports retry policies, SQLite persistence, configurable monitoring settings, and rotating application logs.
 
-## Setup on Windows (PowerShell)
+Built as a Python software engineering and networking portfolio project.
+
+## Features
+
+- **Asynchronous HTTP monitoring** — Check multiple websites concurrently using `asyncio` and `aiohttp`.
+- **Website management** — Add, list, enable, disable, or remove monitored websites.
+- **Live monitoring dashboard** — View website status, HTTP status codes, response times, and retry attempts.
+- **Retry mechanism** — Retry transient HTTP and connection failures using exponential backoff and optional jitter.
+- **Continuous monitoring** — Run repeated checks using configurable intervals.
+- **Persistent monitoring history** — Save completed checks in SQLite.
+- **Monitoring statistics** — Calculate successful and failed checks, observed success percentage, and check-duration statistics.
+- **CSV and JSON reports** — Export summarized monitoring results.
+- **Persistent settings** — Manage configuration using a local JSON file.
+- **Rotating logs** — Store application events with automatic log rotation.
+- **Configuration recovery** — Back up and reset invalid settings.
+- **Automated testing** — Unit, integration, and reliability tests using pytest.
+- **Static code quality** — Ruff linting and formatting, with mypy type checking.
+
+## Technology Stack
+
+| Category | Technology |
+|---|---|
+| Language | Python 3.12+ |
+| Async programming | asyncio |
+| HTTP client | aiohttp |
+| CLI | Typer |
+| Terminal output | Rich |
+| Configuration validation | Pydantic |
+| Database | SQLite |
+| Asynchronous database access | aiosqlite |
+| Logging | Python logging |
+| Testing | pytest and pytest-asyncio |
+| Linting and formatting | Ruff |
+| Type checking | mypy |
+
+## Getting Started
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/MejbahUddinBhuiyan/SitePulse.git
+cd SitePulse
+```
+
+### 2. Create a virtual environment
+
+On Windows PowerShell:
 
 ```powershell
-cd path\to\SitePulse
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+```
+
+On Linux or macOS:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Make sure your virtual environment uses Python 3.12 or newer.
+
+### 3. Install the application
+
+```bash
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e .
 ```
 
-If `py -3.12` is unavailable, run `py -0p` to see installed Python versions. You may use `py -3.13 -m venv .venv` if Python 3.13 is installed.
+### 4. Verify installation
 
-If PowerShell blocks activation, use the venv Python executable directly:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\sitepulse.exe --help
-```
-
-## Working CLI commands (M1)
-
-```powershell
-sitepulse --help
+```bash
 sitepulse version
 sitepulse doctor
-python -m sitepulse --help
+sitepulse --help
 ```
 
-Example output:
+## Quick Start
+
+### Register a website
+
+```bash
+sitepulse add Google https://www.google.com
+```
+
+### View registered websites
+
+```bash
+sitepulse list
+```
+
+### Run a monitoring check
+
+```bash
+sitepulse check
+```
+
+Check a specific website:
+
+```bash
+sitepulse check --id 1
+```
+
+### Monitor continuously
+
+Check websites repeatedly with a 30-second pause between rounds:
+
+```bash
+sitepulse monitor --interval 30
+```
+
+Press `Ctrl+C` to stop.
+
+Run exactly three rounds:
+
+```bash
+sitepulse monitor --interval 5 --count 3
+```
+
+### View monitoring history
+
+```bash
+sitepulse history
+sitepulse history --id 1 --hours 24
+```
+
+### Generate reports
+
+```bash
+sitepulse report
+sitepulse report --id 1 --hours 48
+```
+
+Export results:
+
+```bash
+sitepulse report --format csv --output reports/report.csv
+sitepulse report --format json --output reports/report.json
+```
+
+### Manage configuration
+
+Show settings:
+
+```bash
+sitepulse config show
+```
+
+Update settings:
+
+```bash
+sitepulse config set timeout_seconds 5
+sitepulse config set retry_count 3
+sitepulse config set interval_seconds 15
+sitepulse config set max_concurrency 20
+```
+
+Restore default settings:
+
+```bash
+sitepulse config reset --force
+```
+
+If a configuration file already exists, the reset command saves a backup to `sitepulse.json.bak`.
+
+## Project Structure
 
 ```text
-SitePulse 0.1.0
+SitePulse/
+├── src/
+│   └── sitepulse/
+│       ├── __init__.py
+│       ├── __main__.py
+│       ├── cli.py
+│       ├── config.py
+│       ├── config_cli.py
+│       ├── history_cli.py
+│       ├── runtime.py
+│       ├── models/
+│       ├── services/
+│       │   └── monitor.py
+│       ├── storage/
+│       │   ├── __init__.py
+│       │   └── history.py
+│       └── reports/
+│           └── __init__.py
+├── tests/
+├── docs/
+│   ├── architecture.md
+│   ├── usage.md
+│   └── release-checklist.md
+├── pyproject.toml
+├── README.md
+├── LICENSE
+└── .gitignore
 ```
 
-The `doctor` command shows Python version, executable, platform, and version compatibility.
+Generated SQLite databases, local settings, logs, and report exports should not be committed to the repository.
 
-## Quality checks
+## How It Works
 
-```powershell
-python -m pytest
+1. Users register websites through the CLI.
+2. SitePulse loads enabled websites from SQLite.
+3. The monitoring engine checks websites asynchronously.
+4. Transient failures may trigger retries using exponential backoff.
+5. Results are classified as UP or DOWN.
+6. Completed checks are saved in SQLite.
+7. The CLI displays live results using Rich.
+8. History and reporting commands retrieve stored observations.
+9. Application events are written to rotating log files.
+
+For more technical details, see [Architecture](docs/architecture.md).
+
+## Understanding Monitoring Results
+
+A website is marked **UP** when its HTTP response code falls within the configured success range. By default, this is HTTP 200–399.
+
+A website is marked **DOWN** for other HTTP statuses or recognized request failures.
+
+SitePulse records total check duration, including retry waiting time when retries occur.
+
+The displayed **observed success percentage** is calculated as:
+
+```text
+Successful recorded checks / Total recorded checks × 100
+```
+
+This statistic does not guarantee continuous availability between monitoring checks.
+
+## Configuration
+
+SitePulse stores user settings in `sitepulse.json` in the current working directory.
+
+Examples of configurable values:
+
+- Monitoring interval
+- HTTP timeout
+- Maximum concurrency
+- Retry count
+- Retry base and maximum delay
+- Retry jitter
+- HTTP success-status range
+- SQLite database location
+- Logging level
+- Log rotation size and backup count
+
+See [Usage Guide](docs/usage.md) for details.
+
+## Security and Reliability
+
+SitePulse includes:
+
+- Validation of configuration values
+- Parameterized SQLite operations
+- Transactional monitoring-result storage
+- Graceful cancellation for continuous monitoring
+- Backup-based configuration recovery
+- Log messages based on website IDs rather than full monitored URLs
+- Automated reliability and regression tests
+
+**Security note:** SitePulse is designed for monitoring websites you own or are authorized to check. Avoid putting passwords, access tokens, or other secrets in website URLs. Registered URLs are stored in the local database, and website names/URLs can appear in terminal output.
+
+## Development and Testing
+
+Install the development tools if they are not already installed:
+
+```bash
+python -m pip install pytest pytest-asyncio ruff mypy
+```
+
+Run all automated tests:
+
+```bash
+python -m pytest -q
+```
+
+Run Ruff:
+
+```bash
 python -m ruff check .
 python -m ruff format --check .
+```
+
+Run mypy:
+
+```bash
 python -m mypy
 ```
 
-## Project architecture
+The last verified M9 baseline was **89 passing tests**, with Ruff and mypy passing. Results should be rechecked after changes.
 
-The installable `src/sitepulse` package contains the Typer CLI. Future milestones will add typed models and settings, SQLite repositories, asynchronous HTTP monitoring, reporting, and robust logging. See [docs/architecture.md](docs/architecture.md).
+## Documentation
 
-## Planned features
+- [Usage Guide](docs/usage.md)
+- [Architecture](docs/architecture.md)
+- [Release Checklist](docs/release-checklist.md)
 
-Website management; aiohttp + asyncio concurrency; SSL/DNS/timeout classification; retries and backoff; aiosqlite; Rich reports; CSV/JSON exports; logging and configuration; offline tests.
+## Limitations
 
-## Progress
-
-- [x] M1: environment scaffold, package, CLI smoke tests, documentation
-- [ ] M2: typed models and configuration
-- [ ] M3: website management and SQLite
-- [ ] M4: async monitoring engine
-- [ ] M5: error handling, retry, graceful cancellation
-- [ ] M6: CLI dashboard and website commands
-- [ ] M7: history and reports
-- [ ] M8: logs and configuration CLI
-- [ ] M9: full tests and static validation
-- [ ] M10: final documentation, review, and clean-install audit
+- SitePulse is a locally executed command-line application.
+- Monitoring runs only while the check or monitor process is active.
+- It does not currently provide email, SMS, or push notifications.
+- It does not provide a hosted web dashboard.
+- Monitoring percentages describe sampled checks, not continuous uptime.
+- Monitoring data is stored locally in SQLite.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+See [LICENSE](LICENSE) for the repository's license terms.
