@@ -12,13 +12,18 @@ from rich.console import Console
 from rich.table import Table
 
 from sitepulse import __version__
-from sitepulse.config import MonitoringSettings
+from sitepulse.config_cli import register_config_commands
 from sitepulse.history_cli import register_history_commands
 from sitepulse.models import (
     CheckStatus,
     MonitoringResult,
     Website,
     WebsiteValidationError,
+)
+from sitepulse.runtime import (
+    ConfigurationError,
+    configure_logging,
+    load_settings,
 )
 from sitepulse.services.monitor import WebsiteMonitor
 from sitepulse.storage import StorageError, WebsiteRepository
@@ -32,14 +37,20 @@ app = typer.Typer(
 )
 
 console = Console()
-DEFAULT_DB = MonitoringSettings().database_path
+
+# M8: Read the configured default database path.
+DEFAULT_DB = load_settings().database_path
 
 
 def run_async[T](task: Coroutine[Any, Any, T]) -> T:
     """Run an asynchronous operation from the CLI."""
     try:
         return asyncio.run(task)
-    except (StorageError, WebsiteValidationError) as exc:
+    except (
+        StorageError,
+        WebsiteValidationError,
+        ConfigurationError,
+    ) as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
@@ -222,7 +233,8 @@ def remove_command(
 
 # ---------------------------------------------------------
 # M6: Monitoring CLI
-# M7: Persistent Monitoring Results
+# M7: Persistent Monitoring History
+# M8: Configurable Monitoring and Logging
 # ---------------------------------------------------------
 
 
@@ -230,7 +242,7 @@ async def run_monitoring_batch(
     database_path: Path,
     website_id: int | None = None,
 ) -> list[tuple[Website, MonitoringResult]]:
-    """Load, check, and persist results for enabled websites."""
+    """Check enabled websites and save results to SQLite."""
     repository = await initialize_repository(database_path)
 
     if website_id is None:
@@ -243,13 +255,27 @@ async def run_monitoring_batch(
     if not enabled:
         return []
 
-    monitor = WebsiteMonitor(MonitoringSettings())
+    # M8: Apply saved monitoring configuration.
+    settings = load_settings()
+    logger = configure_logging(settings)
+
+    monitor = WebsiteMonitor(settings)
     results = await monitor.check_all(enabled)
 
     records = list(zip(enabled, results, strict=True))
 
-    # M7: Save the completed monitoring batch to SQLite.
+    # M7: Persist completed monitoring results.
     await HistoryRepository(database_path).save_batch(records)
+
+    # M8: Log IDs and check information, not full URLs.
+    for website, result in records:
+        logger.info(
+            "website_id=%s status=%s http=%s attempts=%s",
+            website.id,
+            result.status.value,
+            result.http_status,
+            result.attempts,
+        )
 
     return records
 
@@ -339,10 +365,10 @@ def check_command(
 async def continuous_monitoring(
     database_path: Path,
     website_id: int | None,
-    interval: float,
+    interval: float | None,
     count: int,
 ) -> None:
-    """Repeatedly check websites and persist each round."""
+    """Monitor repeatedly using configured or explicit intervals."""
     completed = 0
 
     while count == 0 or completed < count:
@@ -360,7 +386,10 @@ async def continuous_monitoring(
         if count != 0 and completed >= count:
             break
 
-        await asyncio.sleep(interval)
+        # M8: Use the saved interval unless overridden by --interval.
+        pause = interval if interval is not None else load_settings().interval_seconds
+
+        await asyncio.sleep(pause)
 
 
 @app.command("monitor")
@@ -374,13 +403,13 @@ def monitor_command(
         ),
     ] = None,
     interval: Annotated[
-        float,
+        float | None,
         typer.Option(
             "--interval",
             min=0.01,
             help="Seconds between monitoring rounds",
         ),
-    ] = 60.0,
+    ] = None,
     count: Annotated[
         int,
         typer.Option(
@@ -417,7 +446,10 @@ def monitor_command(
 
 
 # ---------------------------------------------------------
-# M7: Register History and Reporting Commands
+# M7: History and Reporting Commands
+# M8: Configuration Commands
 # ---------------------------------------------------------
 
+
 register_history_commands(app)
+register_config_commands(app)

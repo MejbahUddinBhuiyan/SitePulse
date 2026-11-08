@@ -1,7 +1,7 @@
 """Validated monitoring settings for SitePulse."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -13,7 +13,7 @@ from pydantic import (
 
 
 class MonitoringSettings(BaseModel):
-    """Configuration for the monitoring engine."""
+    """Validated application and monitoring settings."""
 
     model_config = ConfigDict(
         extra="forbid",
@@ -35,15 +35,20 @@ class MonitoringSettings(BaseModel):
     database_path: Path = Path("sitepulse.db")
     output_format: Literal["table", "json"] = "table"
 
-    @field_validator("database_path")
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    log_file: Path = Path("logs/sitepulse.log")
+    log_max_bytes: int = Field(default=1_048_576, ge=1024)
+    log_backup_count: int = Field(default=3, ge=0, le=20)
+
+    @field_validator("database_path", "log_file")
     @classmethod
-    def database_path_not_empty(cls, value: Path) -> Path:
+    def validate_file_path(cls, value: Path) -> Path:
         if not str(value).strip() or str(value) == ".":
-            raise ValueError("database_path must point to a file")
+            raise ValueError("Path must point to a file")
         return value
 
     @model_validator(mode="after")
-    def validate_ranges(self) -> "MonitoringSettings":
+    def validate_ranges(self) -> Self:
         if self.success_status_min > self.success_status_max:
             raise ValueError("success_status_min must not exceed success_status_max")
 

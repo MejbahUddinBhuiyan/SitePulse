@@ -10,11 +10,17 @@ from rich.console import Console
 from rich.table import Table
 
 from sitepulse.reports import export_summaries, summarize
+from sitepulse.runtime import ConfigurationError, load_settings
 from sitepulse.storage import StorageError, WebsiteRepository
-from sitepulse.storage.history import HistoryEntry, HistoryRepository
+from sitepulse.storage.history import (
+    HistoryEntry,
+    HistoryRepository,
+)
 
 console = Console()
-DEFAULT_DB = Path("sitepulse.db")
+
+# M8: Use the configured default database path.
+DEFAULT_DB = load_settings().database_path
 
 
 async def load_history(
@@ -40,7 +46,7 @@ async def load_history(
 
 
 def register_history_commands(app: typer.Typer) -> None:
-    """Register M7 commands with the existing CLI."""
+    """Register history and report commands with SitePulse."""
 
     @app.command("history")
     def history_command(
@@ -63,8 +69,18 @@ def register_history_commands(app: typer.Typer) -> None:
     ) -> None:
         """Show the most recent recorded website checks."""
         try:
-            entries = asyncio.run(load_history(db, website_id, hours, limit))
-        except StorageError as exc:
+            entries = asyncio.run(
+                load_history(
+                    db,
+                    website_id,
+                    hours,
+                    limit,
+                )
+            )
+        except (
+            StorageError,
+            ConfigurationError,
+        ) as exc:
             console.print(f"[red]Error:[/red] {exc}")
             raise typer.Exit(code=1) from exc
 
@@ -88,12 +104,20 @@ def register_history_commands(app: typer.Typer) -> None:
         for entry in entries:
             result = entry.result
 
+            http_status = str(result.http_status) if result.http_status is not None else "-"
+
+            response_time = (
+                f"{result.response_time_ms:.2f}" if result.response_time_ms is not None else "-"
+            )
+
+            status = "[green]UP[/green]" if result.status.value == "up" else "[red]DOWN[/red]"
+
             table.add_row(
                 str(entry.website_id),
                 entry.website_name,
-                result.status.value.upper(),
-                str(result.http_status) if result.http_status is not None else "-",
-                f"{result.response_time_ms:.2f}" if result.response_time_ms is not None else "-",
+                status,
+                http_status,
+                response_time,
                 str(result.attempts),
                 result.checked_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S"),
             )
@@ -123,13 +147,20 @@ def register_history_commands(app: typer.Typer) -> None:
             typer.Option("--db"),
         ] = DEFAULT_DB,
     ) -> None:
-        """Summarize observed checks and optionally export CSV or JSON."""
+        """Summarize observed checks and optionally export reports."""
         if output_format != "table" and output is None:
             console.print("[red]Error:[/red] --output is required for CSV/JSON")
             raise typer.Exit(code=2)
 
         try:
-            entries = asyncio.run(load_history(db, website_id, hours, None))
+            entries = asyncio.run(
+                load_history(
+                    db,
+                    website_id,
+                    hours,
+                    None,
+                )
+            )
 
             summaries = summarize(entries)
 
@@ -147,7 +178,11 @@ def register_history_commands(app: typer.Typer) -> None:
                 )
                 return
 
-        except (StorageError, OSError) as exc:
+        except (
+            StorageError,
+            ConfigurationError,
+            OSError,
+        ) as exc:
             console.print(f"[red]Error:[/red] {exc}")
             raise typer.Exit(code=1) from exc
 
