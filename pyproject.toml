@@ -1,0 +1,50 @@
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sitepulse-monitor"
+version = "0.1.0"
+description = "A typed, asynchronous website monitoring CLI (under development)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {file = "LICENSE"}
+authors = [{name = "SitePulse Contributors"}]
+dependencies = [
+    "typer>=0.12,<1",
+    "rich>=13,<15",
+    "pydantic>=2.9,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+    "pytest-asyncio>=0.24,<2",
+    "ruff>=0.9,<1",
+    "mypy>=1.13,<2",
+]
+
+[project.scripts]
+sitepulse = "sitepulse.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sitepulse"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/sitepulse"]
+strict = true
