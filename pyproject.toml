@@ -16,6 +16,7 @@ dependencies = [
     "rich>=13,<15",
     "pydantic>=2.9,<3",
     "aiosqlite>=0.20,<1",
+    "aiohttp>=3.11,<4",
 ]
 [project.optional-dependencies]
 dev = [
