@@ -1,6 +1,7 @@
-"""Asynchronous HTTP checks with bounded concurrency."""
+"""Asynchronous website checks with selective retry and graceful cancellation."""
 
 import asyncio
+import random
 import socket
 from datetime import UTC, datetime
 from time import perf_counter
@@ -8,19 +9,63 @@ from time import perf_counter
 import aiohttp
 
 from sitepulse.config import MonitoringSettings
-from sitepulse.models import (
-    CheckStatus,
-    FailureCategory,
-    MonitoringResult,
-    Website,
-)
+from sitepulse.models import CheckStatus, FailureCategory, MonitoringResult, Website
 
 
 class WebsiteMonitor:
-    """Run one batch of HTTP checks; no retry or persistence yet."""
+    """Check enabled websites concurrently using bounded HTTP requests."""
+
+    RETRYABLE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+    RETRYABLE_FAILURES = frozenset({FailureCategory.CONNECTION, FailureCategory.TIMEOUT})
 
     def __init__(self, settings: MonitoringSettings) -> None:
         self.settings = settings
+
+    def _retry_delay(self, retry_number: int) -> float:
+        """Calculate bounded exponential backoff."""
+        delay: float = min(
+            self.settings.retry_base_delay_seconds * (2 ** (retry_number - 1)),
+            self.settings.retry_max_delay_seconds,
+        )
+
+        if self.settings.retry_jitter:
+            return float(random.uniform(0.0, delay))
+
+        return delay
+
+    def _should_retry(self, result: MonitoringResult) -> bool:
+        """Retry only known temporary HTTP or transport failures."""
+        if result.failure_category == FailureCategory.HTTP_STATUS:
+            return result.http_status in self.RETRYABLE_HTTP_STATUSES
+        return result.failure_category in self.RETRYABLE_FAILURES
+
+    async def _request_once(
+        self,
+        website: Website,
+        session: aiohttp.ClientSession,
+        semaphore: asyncio.Semaphore,
+    ) -> tuple[int | None, FailureCategory | None, str | None]:
+        """Perform one HTTP request while holding a concurrency slot."""
+        async with semaphore:
+            try:
+                async with session.get(website.url) as response:
+                    code = response.status
+                    if self.settings.success_status_min <= code <= self.settings.success_status_max:
+                        return code, None, None
+                    return code, FailureCategory.HTTP_STATUS, f"HTTP {code}"
+
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                return None, FailureCategory.TIMEOUT, "Request timed out"
+            except (aiohttp.ClientConnectorCertificateError, aiohttp.ClientSSLError):
+                return None, FailureCategory.SSL, "TLS/SSL verification failed"
+            except aiohttp.ClientConnectorError as exc:
+                if isinstance(exc.os_error, socket.gaierror):
+                    return None, FailureCategory.DNS, "DNS lookup failed"
+                return None, FailureCategory.CONNECTION, "Connection failed"
+            except aiohttp.ClientError:
+                return None, FailureCategory.CONNECTION, "HTTP connection or protocol error"
 
     async def check_one(
         self,
@@ -28,79 +73,40 @@ class WebsiteMonitor:
         session: aiohttp.ClientSession,
         semaphore: asyncio.Semaphore,
     ) -> MonitoringResult:
-        """Check one website and classify network failures."""
-        async with semaphore:
-            checked_at = datetime.now(UTC)
-            started = perf_counter()
+        """Check one website, retrying eligible errors up to retry_count times."""
+        checked_at = datetime.now(UTC)
+        started = perf_counter()
+        max_attempts = self.settings.retry_count + 1
 
-            status_code: int | None = None
-            category: FailureCategory | None = None
-            message: str | None = None
+        for attempt in range(1, max_attempts + 1):
+            code, category, message = await self._request_once(website, session, semaphore)
 
-            try:
-                async with session.get(website.url) as response:
-                    status_code = response.status
-
-                    if not (
-                        self.settings.success_status_min
-                        <= status_code
-                        <= self.settings.success_status_max
-                    ):
-                        category = FailureCategory.HTTP_STATUS
-                        message = f"HTTP {status_code}"
-
-            except asyncio.CancelledError:
-                raise
-
-            except TimeoutError:
-                category = FailureCategory.TIMEOUT
-                message = "Request timed out"
-
-            except (
-                aiohttp.ClientConnectorCertificateError,
-                aiohttp.ClientSSLError,
-            ):
-                category = FailureCategory.SSL
-                message = "TLS/SSL verification failed"
-
-            except aiohttp.ClientConnectorError as exc:
-                category = (
-                    FailureCategory.DNS
-                    if isinstance(exc.os_error, socket.gaierror)
-                    else FailureCategory.CONNECTION
-                )
-                message = (
-                    "DNS lookup failed" if category == FailureCategory.DNS else "Connection failed"
-                )
-
-            except aiohttp.ClientError:
-                category = FailureCategory.CONNECTION
-                message = "HTTP connection or protocol error"
-
-            duration_ms = (perf_counter() - started) * 1000
-
-            return MonitoringResult(
+            result = MonitoringResult(
                 website_url=website.url,
-                status=(CheckStatus.DOWN if category is not None else CheckStatus.UP),
+                status=CheckStatus.DOWN if category is not None else CheckStatus.UP,
                 checked_at=checked_at,
-                http_status=status_code,
-                response_time_ms=duration_ms,
+                http_status=code,
+                response_time_ms=(perf_counter() - started) * 1000,
                 failure_category=category,
                 error_message=message,
+                attempts=attempt,
             )
 
-    async def check_all(
-        self,
-        websites: list[Website],
-    ) -> list[MonitoringResult]:
-        """Check enabled websites concurrently in input order."""
-        enabled = [website for website in websites if website.enabled]
+            if category is None or attempt == max_attempts or not self._should_retry(result):
+                return result
 
+            # Do not occupy a semaphore slot while waiting to retry.
+            await asyncio.sleep(self._retry_delay(attempt))
+
+        raise RuntimeError("Unreachable: at least one request attempt is required")
+
+    async def check_all(self, websites: list[Website]) -> list[MonitoringResult]:
+        """Run one concurrent batch, skipping disabled websites."""
+        enabled = [website for website in websites if website.enabled]
         if not enabled:
             return []
 
         semaphore = asyncio.Semaphore(self.settings.max_concurrency)
-
         timeout = aiohttp.ClientTimeout(total=self.settings.timeout_seconds)
 
         async with aiohttp.ClientSession(
