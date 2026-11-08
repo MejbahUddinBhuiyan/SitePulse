@@ -1,0 +1,13 @@
+[
+  {
+    "website_id": 1,
+    "website_name": "Google",
+    "checks": 4,
+    "successful": 4,
+    "failed": 0,
+    "observed_success_percent": 100.0,
+    "average_ms": 187.2185750398785,
+    "minimum_ms": 174.82170020230114,
+    "maximum_ms": 202.3647997993976
+  }
+]

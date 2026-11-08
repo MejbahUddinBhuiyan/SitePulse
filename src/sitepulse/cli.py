@@ -13,6 +13,7 @@ from rich.table import Table
 
 from sitepulse import __version__
 from sitepulse.config import MonitoringSettings
+from sitepulse.history_cli import register_history_commands
 from sitepulse.models import (
     CheckStatus,
     MonitoringResult,
@@ -21,6 +22,7 @@ from sitepulse.models import (
 )
 from sitepulse.services.monitor import WebsiteMonitor
 from sitepulse.storage import StorageError, WebsiteRepository
+from sitepulse.storage.history import HistoryRepository
 
 app = typer.Typer(
     name="sitepulse",
@@ -49,6 +51,11 @@ async def initialize_repository(
     repository = WebsiteRepository(database_path)
     await repository.initialize()
     return repository
+
+
+# ---------------------------------------------------------
+# M1: Application Information
+# ---------------------------------------------------------
 
 
 @app.command()
@@ -136,7 +143,6 @@ def list_command(
         return
 
     table = Table(title="Registered Websites")
-
     table.add_column("ID", justify="right")
     table.add_column("Name")
     table.add_column("URL")
@@ -216,6 +222,7 @@ def remove_command(
 
 # ---------------------------------------------------------
 # M6: Monitoring CLI
+# M7: Persistent Monitoring Results
 # ---------------------------------------------------------
 
 
@@ -223,7 +230,7 @@ async def run_monitoring_batch(
     database_path: Path,
     website_id: int | None = None,
 ) -> list[tuple[Website, MonitoringResult]]:
-    """Load enabled websites and check them concurrently."""
+    """Load, check, and persist results for enabled websites."""
     repository = await initialize_repository(database_path)
 
     if website_id is None:
@@ -239,7 +246,12 @@ async def run_monitoring_batch(
     monitor = WebsiteMonitor(MonitoringSettings())
     results = await monitor.check_all(enabled)
 
-    return list(zip(enabled, results, strict=True))
+    records = list(zip(enabled, results, strict=True))
+
+    # M7: Save the completed monitoring batch to SQLite.
+    await HistoryRepository(database_path).save_batch(records)
+
+    return records
 
 
 def render_monitoring_results(
@@ -297,9 +309,7 @@ def render_monitoring_results(
 
     console.print(f"[green]UP: {up_count}[/green] | [red]DOWN: {down_count}[/red] | Total: {total}")
 
-    console.print(
-        "[dim]Response time includes retry delays. Results are not yet saved to SQLite.[/dim]"
-    )
+    console.print("[dim]Response time includes retry delays. Results are saved to SQLite.[/dim]")
 
 
 @app.command("check")
@@ -332,7 +342,7 @@ async def continuous_monitoring(
     interval: float,
     count: int,
 ) -> None:
-    """Repeatedly check websites until stopped."""
+    """Repeatedly check websites and persist each round."""
     completed = 0
 
     while count == 0 or completed < count:
@@ -404,3 +414,10 @@ def monitor_command(
         raise typer.Exit(code=130) from None
 
     console.print("[green]Monitoring finished.[/green]")
+
+
+# ---------------------------------------------------------
+# M7: Register History and Reporting Commands
+# ---------------------------------------------------------
+
+register_history_commands(app)
