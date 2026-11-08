@@ -12,25 +12,21 @@ from rich.table import Table
 from sitepulse.reports import export_summaries, summarize
 from sitepulse.runtime import ConfigurationError, load_settings
 from sitepulse.storage import StorageError, WebsiteRepository
-from sitepulse.storage.history import (
-    HistoryEntry,
-    HistoryRepository,
-)
+from sitepulse.storage.history import HistoryEntry, HistoryRepository
 
 console = Console()
 
-# M8: Use the configured default database path.
-DEFAULT_DB = load_settings().database_path
-
 
 async def load_history(
-    db: Path,
+    db: Path | None,
     website_id: int | None,
     hours: float,
     limit: int | None,
 ) -> list[HistoryEntry]:
-    """Read history after verifying the selected website exists."""
-    repository = WebsiteRepository(db)
+    """Resolve settings and read the requested monitoring history."""
+    database_path = db if db is not None else load_settings().database_path
+
+    repository = WebsiteRepository(database_path)
     await repository.initialize()
 
     if website_id is not None:
@@ -38,7 +34,7 @@ async def load_history(
 
     since = datetime.now(UTC) - timedelta(hours=hours)
 
-    return await HistoryRepository(db).fetch(
+    return await HistoryRepository(database_path).fetch(
         website_id=website_id,
         since=since,
         limit=limit,
@@ -46,7 +42,7 @@ async def load_history(
 
 
 def register_history_commands(app: typer.Typer) -> None:
-    """Register history and report commands with SitePulse."""
+    """Register history and reporting commands."""
 
     @app.command("history")
     def history_command(
@@ -63,24 +59,14 @@ def register_history_commands(app: typer.Typer) -> None:
             typer.Option("--limit", min=1),
         ] = 20,
         db: Annotated[
-            Path,
+            Path | None,
             typer.Option("--db"),
-        ] = DEFAULT_DB,
+        ] = None,
     ) -> None:
         """Show the most recent recorded website checks."""
         try:
-            entries = asyncio.run(
-                load_history(
-                    db,
-                    website_id,
-                    hours,
-                    limit,
-                )
-            )
-        except (
-            StorageError,
-            ConfigurationError,
-        ) as exc:
+            entries = asyncio.run(load_history(db, website_id, hours, limit))
+        except (StorageError, ConfigurationError) as exc:
             console.print(f"[red]Error:[/red] {exc}")
             raise typer.Exit(code=1) from exc
 
@@ -104,13 +90,13 @@ def register_history_commands(app: typer.Typer) -> None:
         for entry in entries:
             result = entry.result
 
+            status = "[green]UP[/green]" if result.status.value == "up" else "[red]DOWN[/red]"
+
             http_status = str(result.http_status) if result.http_status is not None else "-"
 
             response_time = (
                 f"{result.response_time_ms:.2f}" if result.response_time_ms is not None else "-"
             )
-
-            status = "[green]UP[/green]" if result.status.value == "up" else "[red]DOWN[/red]"
 
             table.add_row(
                 str(entry.website_id),
@@ -143,9 +129,9 @@ def register_history_commands(app: typer.Typer) -> None:
             typer.Option("--output"),
         ] = None,
         db: Annotated[
-            Path,
+            Path | None,
             typer.Option("--db"),
-        ] = DEFAULT_DB,
+        ] = None,
     ) -> None:
         """Summarize observed checks and optionally export reports."""
         if output_format != "table" and output is None:
@@ -153,14 +139,7 @@ def register_history_commands(app: typer.Typer) -> None:
             raise typer.Exit(code=2)
 
         try:
-            entries = asyncio.run(
-                load_history(
-                    db,
-                    website_id,
-                    hours,
-                    None,
-                )
-            )
+            entries = asyncio.run(load_history(db, website_id, hours, None))
 
             summaries = summarize(entries)
 

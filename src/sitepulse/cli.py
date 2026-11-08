@@ -38,12 +38,16 @@ app = typer.Typer(
 
 console = Console()
 
-# M8: Read the configured default database path.
-DEFAULT_DB = load_settings().database_path
+
+def resolve_database_path(database_path: Path | None) -> Path:
+    """Resolve the database path when the command executes."""
+    if database_path is not None:
+        return database_path
+    return load_settings().database_path
 
 
 def run_async[T](task: Coroutine[Any, Any, T]) -> T:
-    """Run an asynchronous operation from the CLI."""
+    """Run an asynchronous operation with friendly known errors."""
     try:
         return asyncio.run(task)
     except (
@@ -56,10 +60,11 @@ def run_async[T](task: Coroutine[Any, Any, T]) -> T:
 
 
 async def initialize_repository(
-    database_path: Path,
+    database_path: Path | None,
 ) -> WebsiteRepository:
-    """Initialize SQLite and return the website repository."""
-    repository = WebsiteRepository(database_path)
+    """Resolve the database path and initialize SQLite."""
+    path = resolve_database_path(database_path)
+    repository = WebsiteRepository(path)
     await repository.initialize()
     return repository
 
@@ -108,7 +113,7 @@ def doctor() -> None:
 async def add_website(
     name: str,
     url: str,
-    database_path: Path,
+    database_path: Path | None,
 ) -> Website:
     """Validate and save a website."""
     website = Website(name=name, url=url)
@@ -121,18 +126,17 @@ def add_command(
     name: Annotated[str, typer.Argument(help="Website name")],
     url: Annotated[str, typer.Argument(help="Website URL")],
     db: Annotated[
-        Path,
+        Path | None,
         typer.Option("--db", help="SQLite database path"),
-    ] = DEFAULT_DB,
+    ] = None,
 ) -> None:
     """Register a new website."""
     website = run_async(add_website(name, url, db))
-
     console.print(f"[green]Added[/green] #{website.id}: {website.name} ({website.url})")
 
 
 async def list_websites(
-    database_path: Path,
+    database_path: Path | None,
 ) -> list[Website]:
     """Retrieve registered websites."""
     repository = await initialize_repository(database_path)
@@ -142,9 +146,9 @@ async def list_websites(
 @app.command("list")
 def list_command(
     db: Annotated[
-        Path,
+        Path | None,
         typer.Option("--db", help="SQLite database path"),
-    ] = DEFAULT_DB,
+    ] = None,
 ) -> None:
     """List registered websites."""
     websites = run_async(list_websites(db))
@@ -173,9 +177,9 @@ def list_command(
 async def change_website_status(
     website_id: int,
     enabled: bool,
-    database_path: Path,
+    database_path: Path | None,
 ) -> Website:
-    """Update a website's monitoring status."""
+    """Update a website's enabled state."""
     repository = await initialize_repository(database_path)
     return await repository.set_enabled(website_id, enabled)
 
@@ -184,13 +188,12 @@ async def change_website_status(
 def enable_command(
     website_id: Annotated[int, typer.Argument(min=1)],
     db: Annotated[
-        Path,
+        Path | None,
         typer.Option("--db"),
-    ] = DEFAULT_DB,
+    ] = None,
 ) -> None:
     """Enable monitoring for a website."""
     website = run_async(change_website_status(website_id, True, db))
-
     console.print(f"[green]Enabled[/green] #{website.id}: {website.name}")
 
 
@@ -198,19 +201,18 @@ def enable_command(
 def disable_command(
     website_id: Annotated[int, typer.Argument(min=1)],
     db: Annotated[
-        Path,
+        Path | None,
         typer.Option("--db"),
-    ] = DEFAULT_DB,
+    ] = None,
 ) -> None:
     """Disable monitoring for a website."""
     website = run_async(change_website_status(website_id, False, db))
-
     console.print(f"[yellow]Disabled[/yellow] #{website.id}: {website.name}")
 
 
 async def delete_website(
     website_id: int,
-    database_path: Path,
+    database_path: Path | None,
 ) -> None:
     """Remove a registered website."""
     repository = await initialize_repository(database_path)
@@ -221,29 +223,30 @@ async def delete_website(
 def remove_command(
     website_id: Annotated[int, typer.Argument(min=1)],
     db: Annotated[
-        Path,
+        Path | None,
         typer.Option("--db"),
-    ] = DEFAULT_DB,
+    ] = None,
 ) -> None:
     """Permanently remove a website."""
     run_async(delete_website(website_id, db))
-
     console.print(f"[green]Removed[/green] website #{website_id}")
 
 
 # ---------------------------------------------------------
-# M6: Monitoring CLI
-# M7: Persistent Monitoring History
-# M8: Configurable Monitoring and Logging
+# M6: Monitoring
+# M7: Persistent History
+# M8: Configurable Logging
+# M9: Safe Startup
 # ---------------------------------------------------------
 
 
 async def run_monitoring_batch(
-    database_path: Path,
+    database_path: Path | None,
     website_id: int | None = None,
 ) -> list[tuple[Website, MonitoringResult]]:
-    """Check enabled websites and save results to SQLite."""
-    repository = await initialize_repository(database_path)
+    """Check enabled websites and save their results."""
+    path = resolve_database_path(database_path)
+    repository = await initialize_repository(path)
 
     if website_id is None:
         websites = await repository.list_all()
@@ -255,7 +258,6 @@ async def run_monitoring_batch(
     if not enabled:
         return []
 
-    # M8: Apply saved monitoring configuration.
     settings = load_settings()
     logger = configure_logging(settings)
 
@@ -264,10 +266,8 @@ async def run_monitoring_batch(
 
     records = list(zip(enabled, results, strict=True))
 
-    # M7: Persist completed monitoring results.
-    await HistoryRepository(database_path).save_batch(records)
+    await HistoryRepository(path).save_batch(records)
 
-    # M8: Log IDs and check information, not full URLs.
     for website, result in records:
         logger.info(
             "website_id=%s status=%s http=%s attempts=%s",
@@ -349,21 +349,17 @@ def check_command(
         ),
     ] = None,
     db: Annotated[
-        Path,
-        typer.Option(
-            "--db",
-            help="SQLite database path",
-        ),
-    ] = DEFAULT_DB,
+        Path | None,
+        typer.Option("--db", help="SQLite database path"),
+    ] = None,
 ) -> None:
     """Run one monitoring check for enabled websites."""
     records = run_async(run_monitoring_batch(db, website_id))
-
     render_monitoring_results(records)
 
 
 async def continuous_monitoring(
-    database_path: Path,
+    database_path: Path | None,
     website_id: int | None,
     interval: float | None,
     count: int,
@@ -380,13 +376,11 @@ async def continuous_monitoring(
         )
 
         render_monitoring_results(records)
-
         completed += 1
 
         if count != 0 and completed >= count:
             break
 
-        # M8: Use the saved interval unless overridden by --interval.
         pause = interval if interval is not None else load_settings().interval_seconds
 
         await asyncio.sleep(pause)
@@ -419,12 +413,9 @@ def monitor_command(
         ),
     ] = 0,
     db: Annotated[
-        Path,
-        typer.Option(
-            "--db",
-            help="SQLite database path",
-        ),
-    ] = DEFAULT_DB,
+        Path | None,
+        typer.Option("--db", help="SQLite database path"),
+    ] = None,
 ) -> None:
     """Monitor websites repeatedly; press Ctrl+C to stop."""
     console.print("[cyan]Starting SitePulse monitoring...[/cyan]")
@@ -443,12 +434,6 @@ def monitor_command(
         raise typer.Exit(code=130) from None
 
     console.print("[green]Monitoring finished.[/green]")
-
-
-# ---------------------------------------------------------
-# M7: History and Reporting Commands
-# M8: Configuration Commands
-# ---------------------------------------------------------
 
 
 register_history_commands(app)

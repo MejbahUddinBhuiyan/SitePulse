@@ -1,6 +1,7 @@
 """Configuration management commands."""
 
 import json
+import shutil
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -50,7 +51,7 @@ def set_config(
         typer.Option("--file", help="Configuration file"),
     ] = CONFIG_PATH,
 ) -> None:
-    """Update one setting and save the validated configuration."""
+    """Update one setting and save validated configuration."""
     try:
         settings = load_settings(file)
         data: dict[str, Any] = settings.model_dump(mode="json")
@@ -65,6 +66,7 @@ def set_config(
             parsed = value
 
         data[key] = parsed
+
         updated = MonitoringSettings.model_validate(data)
         save_settings(updated, file)
 
@@ -75,6 +77,46 @@ def set_config(
     console.print(f"[green]Updated[/green] {key}")
 
 
+@config_app.command("reset")
+def reset_config(
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Confirm replacement of the current configuration",
+        ),
+    ] = False,
+    file: Annotated[
+        Path,
+        typer.Option("--file", help="Configuration file"),
+    ] = CONFIG_PATH,
+) -> None:
+    """Back up existing settings and restore defaults."""
+    if not force:
+        console.print(
+            "[yellow]Configuration was not changed. Use --force to confirm reset.[/yellow]"
+        )
+        raise typer.Exit(code=2)
+
+    backup = file.with_name(file.name + ".bak")
+
+    try:
+        if file.exists():
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(file, backup)
+
+        save_settings(MonitoringSettings(), file)
+
+    except (ConfigurationError, OSError) as exc:
+        console.print(f"[red]Could not reset configuration:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print("[green]Configuration restored to defaults.[/green]")
+
+    if backup.exists():
+        console.print(f"Backup: {backup}")
+
+
 def register_config_commands(app: typer.Typer) -> None:
-    """Attach config commands to the main application."""
+    """Attach configuration commands to SitePulse."""
     app.add_typer(config_app, name="config")
