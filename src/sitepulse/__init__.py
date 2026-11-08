@@ -1,3 +1,3 @@
-"""SitePulse: local-first website monitoring CLI."""
+"""SitePulse: Intelligent Asynchronous Website Monitoring."""
 
 __version__ = "0.1.0"
